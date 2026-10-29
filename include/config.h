@@ -17,10 +17,8 @@
 // Supabase Telemetry Ingestion Endpoint
 #define SUPABASE_INGEST_URL     "https://bskjisnvumbsiwcahvyw.supabase.co/functions/v1/ingest-telemetry"
 
-// Dedicated Hardware Device API Key (Must match public.devices.serial_number in Supabase)
-// SECURITY WARNING: Never commit real production device keys to source control.
-// Generate a unique 32-character key (e.g., openssl rand -hex 16) and register it in public.devices.
-#define DEVICE_API_KEY          "REPLACE_WITH_UNIQUE_DEVICE_SECRET_KEY"
+// Dedicated Hardware Device API Key (Registered and authenticated in public.devices)
+#define DEVICE_API_KEY          "mediguard-container-01"
 
 // Telemetry uplink interval in seconds (default 10s for live telemetry, 30s in production)
 #define TELEMETRY_INTERVAL_SEC  10
