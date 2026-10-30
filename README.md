@@ -96,7 +96,15 @@ x-device-key: <YOUR_GENERATED_DEVICE_KEY>
 
 ### Real-Time Event Uplinks:
 - **Door Transition**: Immediate packet sent upon door open or closed transition (debounced 50ms).
-- **RFID Scan Event**: Triggers local 50ms confirmation beep, 3-second OLED popup, and immediate event payload.
+- **RFID Scan Event & Verification**:
+  - Checks if the scanned UID is registered in Supabase.
+  - **If Registered**: Plays a clean confirmation chirp and shows `MEDICINE VERIFIED` with medicine name and storage zone on the OLED.
+  - **If Unregistered / Invalid**: Sounds a distinct warning double-beep, flashes the Red Alert LED, and displays `[!] INVALID ID [!]` with `NOT REGISTERED! Sent to Mobile App`. Automatically logs the unknown UID to `public.unregistered_medicines` for mobile app onboarding.
+
+---
+
+### Supabase Schema for Unregistered RFID Tags
+See [supabase_unregistered_medicines.sql](file:///Users/aitech/Documents/App/MediGuard-ESP32/supabase_unregistered_medicines.sql) for table creation, indexes, and RLS policies.
 
 ---
 

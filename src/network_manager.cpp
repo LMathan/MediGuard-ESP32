@@ -29,6 +29,12 @@ void NetworkManager::connectWiFi() {
     Serial.printf("[NETWORK:WiFi] Connecting to SSID: '%s'...\n", WIFI_SSID);
     WiFi.disconnect(true);
     delay(100);
+
+    // Set fallback public DNS servers (8.8.8.8, 1.1.1.1) to avoid hotspot DNS resolver failures
+    IPAddress primaryDNS(8, 8, 8, 8);
+    IPAddress secondaryDNS(1, 1, 1, 1);
+    WiFi.config(INADDR_NONE, INADDR_NONE, INADDR_NONE, primaryDNS, secondaryDNS);
+
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
     uint32_t startAttempt = millis();
@@ -185,6 +191,7 @@ void NetworkManager::flushQueue() {
 bool NetworkManager::postTelemetryPayload(const String& jsonBuffer) {
     WiFiClientSecure client;
     client.setInsecure(); // Cloudflare Supabase gateway TLS connection
+    client.setHandshakeTimeout(15);
 
     HTTPClient https;
     https.setTimeout(HTTP_REQUEST_TIMEOUT_MS);
@@ -272,11 +279,25 @@ bool NetworkManager::sendTelemetry(const CompartmentReading& normal,
     return ok;
 }
 
-bool NetworkManager::sendRfidScanEvent(const String& rfidUid, const char* compartment) {
-    if (WiFi.status() != WL_CONNECTED || rfidUid.length() == 0) return false;
+RfidScanResult NetworkManager::sendRfidScanEvent(const String& rfidUid, const char* compartment) {
+    RfidScanResult result;
+    result.uid = rfidUid;
+    result.compartment = compartment;
+    result.timestamp = millis();
+    result.status = RFID_STATUS_INVALID; // Default to invalid/unregistered
 
-    // Send RFID inventory scan event
-    Serial.printf("[NETWORK:RFID] Reporting tag scan event to backend: UID=%s, Compartment=%s\n",
+    if (rfidUid.length() == 0) {
+        return result;
+    }
+
+    if (WiFi.status() != WL_CONNECTED) {
+        Serial.println("[NETWORK:RFID] Wi-Fi offline; marking card as unverified / invalid.");
+        _lastTxSuccess = false;
+        result.status = RFID_STATUS_INVALID;
+        return result;
+    }
+
+    Serial.printf("[NETWORK:RFID] Verifying tag with backend: UID=%s, Compartment=%s\n",
                   rfidUid.c_str(), compartment);
 
     JsonDocument doc;
@@ -293,5 +314,61 @@ bool NetworkManager::sendRfidScanEvent(const String& rfidUid, const char* compar
     String jsonBuffer;
     serializeJson(doc, jsonBuffer);
 
-    return postTelemetryPayload(jsonBuffer);
+    WiFiClientSecure client;
+    client.setInsecure(); // Skip certificate verification for embedded TLS
+    client.setHandshakeTimeout(15);
+
+    HTTPClient https;
+    https.setTimeout(HTTP_REQUEST_TIMEOUT_MS);
+
+    if (https.begin(client, SUPABASE_INGEST_URL)) {
+        https.addHeader("Content-Type", "application/json");
+        https.addHeader("x-device-key", DEVICE_API_KEY);
+
+        int httpCode = https.POST(jsonBuffer);
+
+        if (httpCode == HTTP_CODE_OK || httpCode == HTTP_CODE_CREATED) {
+            String response = https.getString();
+            _totalPacketsSent++;
+            _lastTxSuccess = true;
+            Serial.printf("[NETWORK:RFID HTTP 200] Backend response received:\n%s\n", response.c_str());
+
+            JsonDocument resDoc;
+            DeserializationError err = deserializeJson(resDoc, response);
+            if (!err) {
+                bool isRegistered = resDoc["registered"] | false;
+                const char* statusStr = resDoc["status"] | "";
+                const char* medName = resDoc["medicine_name"] | resDoc["name"] | "";
+
+                if (isRegistered || strcmp(statusStr, "registered") == 0 || strcmp(statusStr, "valid") == 0) {
+                    result.status = RFID_STATUS_VALID;
+                    result.medicineName = String(medName);
+                    Serial.printf("[NETWORK:RFID] Recognized medicine: '%s'\n", result.medicineName.c_str());
+                } else {
+                    result.status = RFID_STATUS_INVALID;
+                    Serial.printf("[NETWORK:RFID] Unregistered UID: %s (Logged in Supabase for mobile app)\n", rfidUid.c_str());
+                }
+            } else {
+                // If response cannot be parsed as JSON, fall back to string inspection
+                if (response.indexOf("registered") >= 0 && response.indexOf("unregistered") < 0) {
+                    result.status = RFID_STATUS_VALID;
+                } else {
+                    result.status = RFID_STATUS_INVALID;
+                }
+            }
+        } else {
+            _totalPacketsFailed++;
+            _lastTxSuccess = false;
+            result.status = RFID_STATUS_INVALID;
+            Serial.printf("[NETWORK:RFID ERROR] HTTP %d: %s\n", httpCode, https.getString().c_str());
+        }
+        https.end();
+    } else {
+        _totalPacketsFailed++;
+        _lastTxSuccess = false;
+        result.status = RFID_STATUS_INVALID;
+        Serial.println("[NETWORK:RFID ERROR] Failed to initialize HTTPS connection.");
+    }
+
+    return result;
 }

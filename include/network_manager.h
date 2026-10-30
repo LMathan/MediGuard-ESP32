@@ -26,7 +26,7 @@ public:
                        bool fanActive,
                        SensorHealthStatus health);
 
-    bool sendRfidScanEvent(const String& rfidUid, const char* compartment);
+    RfidScanResult sendRfidScanEvent(const String& rfidUid, const char* compartment);
 
     uint32_t getTotalSent() const { return _totalPacketsSent; }
     uint32_t getTotalFailed() const { return _totalPacketsFailed; }

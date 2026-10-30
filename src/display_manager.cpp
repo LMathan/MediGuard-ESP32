@@ -62,36 +62,66 @@ void DisplayManager::update(const CompartmentReading& normal,
                             SensorHealthStatus health,
                             bool wifiConnected,
                             bool lastTxSuccess,
-                            const String& recentRfid,
-                            uint32_t rfidTimestamp) {
+                            const RfidScanResult& scanResult) {
     if (!_isAvailable) return;
 
     uint32_t now = millis();
-    if (now - _lastRenderTime < 300) {
-        return; // Render at ~3Hz to minimize I2C bus traffic
+    if (now - _lastRenderTime < 250) {
+        return; // Render at ~4Hz to minimize I2C bus traffic
     }
     _lastRenderTime = now;
 
     _display.clearDisplay();
 
-    // Check if RFID scan modal should be active (within 3 seconds of scan)
-    if (recentRfid.length() > 0 && (now - rfidTimestamp < 3000)) {
+    // Check if RFID scan modal should be active (within 3.5 seconds of scan)
+    if (scanResult.uid.length() > 0 && (now - scanResult.timestamp < 3500)) {
         _display.drawRect(2, 2, 124, 60, SSD1306_WHITE);
         _display.fillRect(4, 4, 120, 12, SSD1306_WHITE);
         _display.setTextColor(SSD1306_BLACK, SSD1306_WHITE);
         _display.setTextSize(1);
-        _display.setCursor(12, 6);
-        _display.println(F("RFID BADGE SCANNED"));
 
-        _display.setTextColor(SSD1306_WHITE, SSD1306_BLACK);
-        _display.setCursor(10, 24);
-        _display.println(F("Medicine UID:"));
-        _display.setCursor(10, 36);
-        _display.setTextSize(1);
-        _display.println(recentRfid);
+        if (scanResult.status == RFID_STATUS_INVALID) {
+            // Header for Unregistered / Invalid ID
+            _display.setCursor(14, 6);
+            _display.println(F("[!] INVALID ID [!]"));
 
-        _display.setCursor(10, 48);
-        _display.println(F("Transmitting event..."));
+            _display.setTextColor(SSD1306_WHITE, SSD1306_BLACK);
+            _display.setCursor(8, 20);
+            _display.printf("UID: %s\n", scanResult.uid.c_str());
+            _display.setCursor(8, 32);
+            _display.println(F("NOT REGISTERED!"));
+            _display.setCursor(8, 44);
+            _display.println(F("Sent to Mobile App"));
+        } else if (scanResult.status == RFID_STATUS_VALID) {
+            // Header for Recognized & Registered Medicine
+            _display.setCursor(12, 6);
+            _display.println(F("MEDICINE VERIFIED"));
+
+            _display.setTextColor(SSD1306_WHITE, SSD1306_BLACK);
+            _display.setCursor(8, 20);
+            _display.printf("UID: %s\n", scanResult.uid.c_str());
+            _display.setCursor(8, 32);
+            if (scanResult.medicineName.length() > 0) {
+                _display.printf("%.14s\n", scanResult.medicineName.c_str());
+            } else {
+                _display.println(F("Status: Registered OK"));
+            }
+            _display.setCursor(8, 44);
+            _display.printf("Zone: %s Storage\n", scanResult.compartment.c_str());
+        } else {
+            // Header while verifying with cloud
+            _display.setCursor(16, 6);
+            _display.println(F("CHECKING RFID..."));
+
+            _display.setTextColor(SSD1306_WHITE, SSD1306_BLACK);
+            _display.setCursor(8, 22);
+            _display.printf("UID: %s\n", scanResult.uid.c_str());
+            _display.setCursor(8, 36);
+            _display.println(F("Verifying in Cloud..."));
+            _display.setCursor(8, 48);
+            _display.println(F("Please hold..."));
+        }
+
         _display.display();
         return;
     }

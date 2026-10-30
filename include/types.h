@@ -13,6 +13,13 @@ enum SensorHealthStatus {
     SENSOR_FAULT   = 2
 };
 
+enum RfidScanStatus {
+    RFID_STATUS_NONE = 0,
+    RFID_STATUS_VALID = 1,       // Recognized / registered medicine
+    RFID_STATUS_INVALID = 2,     // Unregistered / invalid ID
+    RFID_STATUS_PENDING = 3      // Verifying with cloud backend
+};
+
 inline const char* sensorHealthToString(SensorHealthStatus s) {
     switch (s) {
         case SENSOR_HEALTHY: return "healthy";
@@ -32,14 +39,28 @@ struct CompartmentReading {
     uint32_t doorOpenTime;  // Timestamp (millis) when door opened
 };
 
+struct RfidScanResult {
+    String uid;
+    RfidScanStatus status;
+    String medicineName;
+    String compartment;
+    uint32_t timestamp;
+
+    RfidScanResult()
+        : uid(""),
+          status(RFID_STATUS_NONE),
+          medicineName(""),
+          compartment(""),
+          timestamp(0) {}
+};
+
 struct SystemTelemetry {
     CompartmentReading normal;
     CompartmentReading cold;
     bool coolingActive;     // State of cold cooling element
     bool fanActive;         // State of normal compartment fan
     SensorHealthStatus health;
-    String lastRfidUid;     // Last scanned RFID card UID
-    uint32_t rfidScanTime;  // Timestamp of last card scan
+    RfidScanResult lastScan; // Last scanned RFID card and validation result
     String isoTimestamp;    // UTC ISO-8601 timestamp string
 };
 

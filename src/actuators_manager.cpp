@@ -49,7 +49,20 @@ void ActuatorsManager::beep(uint16_t durationMs) {
 }
 
 void ActuatorsManager::triggerRfidBeep() {
-    beep(50); // 50ms short confirmation chirp for RFID scan
+    beep(60); // 60ms clean confirmation chirp for verified RFID scan
+}
+
+void ActuatorsManager::triggerInvalidRfidAlert() {
+    // Distinct double warning chirp and alert LED flash for unregistered/invalid tag
+    digitalWrite(PIN_LED_ALERT, HIGH);
+    digitalWrite(PIN_BUZZER, HIGH);
+    delay(100);
+    digitalWrite(PIN_BUZZER, LOW);
+    delay(70);
+    digitalWrite(PIN_BUZZER, HIGH);
+    delay(160);
+    digitalWrite(PIN_BUZZER, LOW);
+    digitalWrite(PIN_LED_ALERT, LOW);
 }
 
 void ActuatorsManager::update(const CompartmentReading& normal,

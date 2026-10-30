@@ -16,6 +16,7 @@ public:
 
     void beep(uint16_t durationMs = 50);
     void triggerRfidBeep();
+    void triggerInvalidRfidAlert();
     void setRelayOverride(bool state);
     bool isCoolingActive() const { return _coolingActive; }
     bool isFanActive() const { return _fanActive; }

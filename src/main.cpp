@@ -24,6 +24,7 @@ uint32_t telemetryIntervalMs = TELEMETRY_INTERVAL_SEC * 1000UL;
 
 bool lastNormalDoorState = false;
 bool lastColdDoorState = false;
+RfidScanResult lastScanResult;
 
 // Serial CLI prototypes
 void processSerialCli();
@@ -76,12 +77,36 @@ void loop() {
         String uid = rfid.getLastUid();
         Serial.printf("[SYSTEM:RFID] Card Scanned: %s\n", uid.c_str());
 
-        // Local auditory confirmation (50ms beep)
-        actuators.triggerRfidBeep();
-
         // Determine compartment based on open door, or default to cold
         const char* comp = sensors.getNormal().doorOpen ? "normal" : "cold";
-        network.sendRfidScanEvent(uid, comp);
+
+        // Show pending verification modal on display immediately
+        lastScanResult.uid = uid;
+        lastScanResult.status = RFID_STATUS_PENDING;
+        lastScanResult.compartment = String(comp);
+        lastScanResult.timestamp = now;
+        display.update(
+            sensors.getNormal(),
+            sensors.getCold(),
+            sensors.getOverallHealth(),
+            network.isConnected(),
+            network.getLastTxSuccess(),
+            lastScanResult
+        );
+
+        // Transmit scan to cloud backend for verification & auto-registration
+        lastScanResult = network.sendRfidScanEvent(uid, comp);
+
+        if (lastScanResult.status == RFID_STATUS_VALID) {
+            // Recognized & registered medicine -> Clean confirmation chirp
+            actuators.triggerRfidBeep();
+            Serial.printf("[SYSTEM:RFID] Valid Medicine: '%s' (%s zone)\n",
+                          lastScanResult.medicineName.c_str(), comp);
+        } else {
+            // Unregistered / invalid card -> Audio-visual alert & stored for mobile app
+            actuators.triggerInvalidRfidAlert();
+            Serial.printf("[SYSTEM:RFID] INVALID ID: '%s' -> Stored in Supabase for Mobile App!\n", uid.c_str());
+        }
 
         // Also trigger an immediate telemetry packet with the updated state
         network.sendTelemetry(
@@ -130,8 +155,7 @@ void loop() {
         sensors.getOverallHealth(),
         network.isConnected(),
         network.getLastTxSuccess(),
-        rfid.getLastUid(),
-        rfid.getLastScanTime()
+        lastScanResult
     );
 
     // 6. Scheduled Telemetry Uplink
@@ -237,8 +261,10 @@ void printDiagnostics() {
                   ENABLE_RELAY_OUTPUT ? "YES" : "NO (SAFETY LOCKED)");
     Serial.printf("Normal Fan:            %s\n",
                   actuators.isFanActive() ? "ON" : "OFF");
-    Serial.printf("Last Scanned RFID UID: %s\n",
-                  rfid.getLastUid().length() > 0 ? rfid.getLastUid().c_str() : "None");
+    Serial.printf("Last Scanned RFID UID: %s (%s)\n",
+                  lastScanResult.uid.length() > 0 ? lastScanResult.uid.c_str() : "None",
+                  lastScanResult.status == RFID_STATUS_VALID ? "VALID" :
+                  (lastScanResult.status == RFID_STATUS_INVALID ? "INVALID / UNREGISTERED" : "NONE"));
     Serial.println(F("=========================================================\n"));
 }
 

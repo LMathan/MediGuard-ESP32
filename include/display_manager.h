@@ -17,8 +17,7 @@ public:
                 SensorHealthStatus health,
                 bool wifiConnected,
                 bool lastTxSuccess,
-                const String& recentRfid,
-                uint32_t rfidTimestamp);
+                const RfidScanResult& scanResult);
     void showSplash();
     void showMessage(const char* title, const char* msg);
 
