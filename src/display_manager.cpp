@@ -3,7 +3,9 @@
 DisplayManager::DisplayManager()
     : _display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1),
       _isAvailable(false),
-      _lastRenderTime(0) {
+      _lastRenderTime(0),
+      _currentPage(0),
+      _lastPageSwitchTime(0) {
 }
 
 bool DisplayManager::begin() {
@@ -66,15 +68,18 @@ void DisplayManager::update(const CompartmentReading& normal,
     if (!_isAvailable) return;
 
     uint32_t now = millis();
-    if (now - _lastRenderTime < 250) {
-        return; // Render at ~4Hz to minimize I2C bus traffic
+    if (now - _lastRenderTime < 150) {
+        return; // Render at ~6Hz to minimize I2C bus traffic
     }
     _lastRenderTime = now;
 
     _display.clearDisplay();
 
-    // Check if RFID scan modal should be active (within 3.5 seconds of scan)
-    if (scanResult.uid.length() > 0 && (now - scanResult.timestamp < 3500)) {
+    // ========================================================================
+    // PRIORITY 1: RFID / NFC Scan Event Override
+    // Displays immediately when card is tapped, stays for 2.5 seconds, then resumes
+    // ========================================================================
+    if (scanResult.uid.length() > 0 && (now - scanResult.timestamp < 2500)) {
         _display.drawRect(2, 2, 124, 60, SSD1306_WHITE);
         _display.fillRect(4, 4, 120, 12, SSD1306_WHITE);
         _display.setTextColor(SSD1306_BLACK, SSD1306_WHITE);
@@ -126,85 +131,160 @@ void DisplayManager::update(const CompartmentReading& normal,
         return;
     }
 
-    _display.setTextColor(SSD1306_WHITE, SSD1306_BLACK);
-
-    // --- TOP STATUS BAR ---
-    _display.setTextSize(1);
-    _display.setCursor(0, 0);
-    _display.print(F("MEDIGUARD"));
-
-    _display.setCursor(76, 0);
-    if (wifiConnected) {
-        _display.print(F("W:OK"));
-    } else {
-        _display.print(F("W:--"));
-    }
-
-    _display.setCursor(106, 0);
-    if (lastTxSuccess) {
-        _display.print(F("C:OK"));
-    } else {
-        _display.print(F("C:--"));
-    }
-
-    _display.drawFastHLine(0, 9, 128, SSD1306_WHITE);
-
-    // --- COLD COMPARTMENT SECTION (Top half) ---
-    _display.setCursor(0, 13);
-    _display.print(F("COLD "));
-    if (cold.valid) {
-        _display.printf("%4.1fC %2.0f%%", cold.temperature, cold.humidity);
-    } else {
-        _display.print(F(" ERR SENSOR"));
-    }
-
-    _display.setCursor(96, 13);
-    if (cold.doorOpen) {
-        _display.print(F("[OPEN]"));
-    } else {
-        _display.print(F("[CLSD]"));
-    }
-
-    // --- NORMAL COMPARTMENT SECTION (Middle) ---
-    _display.setCursor(0, 26);
-    _display.print(F("NORM "));
-    if (normal.valid) {
-        _display.printf("%4.1fC %2.0f%%", normal.temperature, normal.humidity);
-    } else {
-        _display.print(F(" ERR SENSOR"));
-    }
-
-    _display.setCursor(96, 26);
-    if (normal.doorOpen) {
-        _display.print(F("[OPEN]"));
-    } else {
-        _display.print(F("[CLSD]"));
-    }
-
-    _display.drawFastHLine(0, 38, 128, SSD1306_WHITE);
-
-    // --- BOTTOM ALERT / HEALTH FOOTER ---
-    _display.setCursor(0, 43);
-
-    // Determine bottom message banner
+    // ========================================================================
+    // PRIORITY 2: Emergency Door Open Alert
+    // Immediately interrupts carousel to show which door is open
+    // ========================================================================
     if (cold.doorOpen || normal.doorOpen) {
-        _display.print(F("! DOOR OPEN !"));
-    } else if (cold.temperature > COLD_TEMP_MAX_C) {
-        _display.printf("! COLD HIGH: %.1fC !", cold.temperature);
-    } else if (cold.temperature < COLD_TEMP_MIN_C) {
-        _display.printf("! COLD LOW: %.1fC !", cold.temperature);
-    } else if (normal.temperature > NORMAL_TEMP_MAX_C || normal.temperature < NORMAL_TEMP_MIN_C) {
-        _display.printf("! NORM TEMP EXCURSION !");
-    } else if (health == SENSOR_FAULT) {
-        _display.print(F("! SENSOR DISCONNECTED !"));
-    } else {
-        _display.print(F("Status: ALL OPTIMAL"));
+        renderDoorAlertScreen(normal, cold);
+        _display.display();
+        return;
     }
 
-    _display.setCursor(0, 54);
-    _display.printf("Cold Light: %s | N: %s",
-                   cold.lightDetected ? "ON" : "OFF",
-                   normal.lightDetected ? "ON" : "OFF");
+    // ========================================================================
+    // NORMAL ROTATING CAROUSEL LOOP
+    // Cycles every 2.5 seconds between:
+    // Screen 0: Cold Storage Compartment (Big Temp & Hum)
+    // Screen 1: Normal Room Storage Compartment (Big Temp & Hum)
+    // Screen 2: System Health, Wi-Fi & LDR Light Monitor
+    // ========================================================================
+    if (now - _lastPageSwitchTime >= 2500) {
+        _currentPage = (_currentPage + 1) % 3;
+        _lastPageSwitchTime = now;
+    }
+
+    switch (_currentPage) {
+        case 0:
+            renderColdScreen(cold, wifiConnected, lastTxSuccess);
+            break;
+        case 1:
+            renderNormalScreen(normal, wifiConnected, lastTxSuccess);
+            break;
+        case 2:
+        default:
+            renderSystemScreen(normal, cold, health, wifiConnected, lastTxSuccess);
+            break;
+    }
 
     _display.display();
+}
+
+void DisplayManager::drawTopStatusBar(bool wifiConnected, bool lastTxSuccess, const char* pageTitle) {
+    _display.setTextColor(SSD1306_WHITE, SSD1306_BLACK);
+    _display.setTextSize(1);
+    _display.setCursor(0, 0);
+    _display.print(pageTitle);
+
+    _display.setCursor(76, 0);
+    _display.print(wifiConnected ? F("W:OK") : F("W:--"));
+
+    _display.setCursor(106, 0);
+    _display.print(lastTxSuccess ? F("C:OK") : F("C:--"));
+
+    _display.drawFastHLine(0, 9, 128, SSD1306_WHITE);
+}
+
+void DisplayManager::renderColdScreen(const CompartmentReading& cold, bool wifiConnected, bool lastTxSuccess) {
+    drawTopStatusBar(wifiConnected, lastTxSuccess, "COLD STORAGE");
+
+    _display.setTextSize(1);
+    _display.setCursor(0, 13);
+    _display.println(F("Refrigerated (2-8C)"));
+
+    // Big Temperature (Size 2 font)
+    _display.setCursor(4, 25);
+    _display.setTextSize(2);
+    if (cold.valid) {
+        _display.printf("%4.1f C\n", cold.temperature);
+    } else {
+        _display.setTextSize(1);
+        _display.setCursor(14, 28);
+        _display.println(F("[SENSOR FAULT]"));
+    }
+
+    // Humidity & Status Details
+    _display.setTextSize(1);
+    _display.setCursor(0, 44);
+    if (cold.valid) {
+        _display.printf("Humidity: %2.0f%% RH\n", cold.humidity);
+    } else {
+        _display.println(F("Check sensor wire"));
+    }
+
+    _display.setCursor(0, 55);
+    _display.printf("Door: CLOSED | Dark: OK");
+}
+
+void DisplayManager::renderNormalScreen(const CompartmentReading& normal, bool wifiConnected, bool lastTxSuccess) {
+    drawTopStatusBar(wifiConnected, lastTxSuccess, "ROOM STORAGE");
+
+    _display.setTextSize(1);
+    _display.setCursor(0, 13);
+    _display.println(F("Standard (15-25C)"));
+
+    // Big Temperature (Size 2 font)
+    _display.setCursor(4, 25);
+    _display.setTextSize(2);
+    if (normal.valid) {
+        _display.printf("%4.1f C\n", normal.temperature);
+    } else {
+        _display.setTextSize(1);
+        _display.setCursor(14, 28);
+        _display.println(F("[SENSOR FAULT]"));
+    }
+
+    // Humidity & Status Details
+    _display.setTextSize(1);
+    _display.setCursor(0, 44);
+    if (normal.valid) {
+        _display.printf("Humidity: %2.0f%% RH\n", normal.humidity);
+    } else {
+        _display.println(F("Check sensor wire"));
+    }
+
+    _display.setCursor(0, 55);
+    _display.printf("Door: CLOSED | Dark: OK");
+}
+
+void DisplayManager::renderSystemScreen(const CompartmentReading& normal,
+                                       const CompartmentReading& cold,
+                                       SensorHealthStatus health,
+                                       bool wifiConnected,
+                                       bool lastTxSuccess) {
+    drawTopStatusBar(wifiConnected, lastTxSuccess, "SYSTEM STATUS");
+
+    _display.setTextSize(1);
+    _display.setCursor(0, 13);
+    _display.printf("Wi-Fi: %s\n", wifiConnected ? "ONLINE" : "OFFLINE");
+
+    _display.setCursor(0, 24);
+    _display.printf("Cloud: %s\n", lastTxSuccess ? "Supabase Synced" : "Pending...");
+
+    _display.setCursor(0, 36);
+    _display.println(F("Photosensitive LDRs:"));
+
+    _display.setCursor(0, 47);
+    _display.printf("Cold: %s\n", cold.lightDetected ? "! LIGHT LEAK !" : "DARK [Protected]");
+
+    _display.setCursor(0, 56);
+    _display.printf("Room: %s\n", normal.lightDetected ? "! LIGHT LEAK !" : "DARK [Protected]");
+}
+
+void DisplayManager::renderDoorAlertScreen(const CompartmentReading& normal, const CompartmentReading& cold) {
+    _display.drawRect(2, 2, 124, 60, SSD1306_WHITE);
+    _display.fillRect(4, 4, 120, 12, SSD1306_WHITE);
+    _display.setTextColor(SSD1306_BLACK, SSD1306_WHITE);
+    _display.setTextSize(1);
+    _display.setCursor(8, 6);
+    _display.println(F("! DOOR OPEN ALERT !"));
+
+    _display.setTextColor(SSD1306_WHITE, SSD1306_BLACK);
+    _display.setCursor(10, 22);
+    _display.printf("Cold Door:   %s\n", cold.doorOpen ? "OPEN  <--" : "CLOSED");
+
+    _display.setCursor(10, 35);
+    _display.printf("Normal Door: %s\n", normal.doorOpen ? "OPEN  <--" : "CLOSED");
+
+    _display.setCursor(10, 49);
+    _display.println(F("Close door to seal!"));
 }
